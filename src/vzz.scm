@@ -13,6 +13,7 @@
 ;; socket()/connect()/read()/write().
 
 (import scheme
+        args
         (chicken base)
         (chicken condition)
         (chicken file)
@@ -94,24 +95,40 @@ static char *vzz_read_chunk(int fd) {
 
 (define prog-name "vzz")
 
+;; So the args egg's own internal messages (e.g. "option X requires an
+;; argument") say "vzz" instead of the invocation path.
+(program-name prog-name)
+
 (define (usage-port status)
   (if (= status 0) (current-output-port) (current-error-port)))
+
+(define option-spec
+  (list
+    (args:make-option (duration) (#:required "MINUTES")
+      "play for MINUTES minutes, then stop")
+    (args:make-option (fade-audio-at) (#:required "MINUTES")
+      "fade volume to silence, reaching 0 at --duration")
+    (args:make-option (fade-video-at) (#:required "MINUTES")
+      "fade picture to black, reaching black at --duration")
+    (args:make-option (fullscreen) #:none
+      "play mpv fullscreen instead of windowed")
+    (args:make-option (shutdown) #:none
+      "power off once playback stops naturally")
+    (args:make-option (h help) #:none
+      "show this message"
+      (usage-and-exit 0))))
 
 (define (usage-and-exit status)
   (let ((port (usage-port status)))
     (fprintf port "usage: ~a VIDEO_FILE --duration MINUTES [options]\n\n" prog-name)
     (fprintf port "Play VIDEO_FILE for MINUTES minutes, then stop.\n\n")
     (fprintf port "options:\n")
-    (fprintf port "  --fade-audio-at MINUTES  fade volume to silence, reaching 0 at --duration\n")
-    (fprintf port "  --fade-video-at MINUTES  fade picture to black, reaching black at --duration\n")
-    (fprintf port "  --fullscreen             play mpv fullscreen instead of windowed\n")
-    (fprintf port "  --shutdown               power off once playback stops naturally\n")
-    (fprintf port "  -h, --help               show this message\n"))
+    (display (args:usage option-spec) port))
   (exit status))
 
-(define (die . args)
+(define (die . fmt-args)
   (fprintf (current-error-port) "~a: " prog-name)
-  (apply fprintf (current-error-port) args)
+  (apply fprintf (current-error-port) fmt-args)
   (newline (current-error-port))
   (usage-and-exit 1))
 
@@ -119,44 +136,35 @@ static char *vzz_read_chunk(int fd) {
   (or (string->number value)
       (die "~a must be a number, got ~s" name value)))
 
+(define (unrecognized-option opt name arg options operands)
+  (die "unknown option ~a~a" (if (char? name) "-" "--") name))
+
+(define (opt-value name options)
+  (let ((pair (assq name options)))
+    (and pair (cdr pair))))
+
 ;; Returns (values video-file duration-minutes fade-audio-minutes
 ;;         fade-video-minutes fullscreen? shutdown?). fade-*-minutes are #f
 ;; when not given.
-(define (parse-args args)
-  (let loop ((args args) (video #f) (duration #f)
-             (fade-audio #f) (fade-video #f)
-             (fullscreen #f) (shutdown #f))
-    (define (need-value! name)
-      (when (null? (cdr args)) (die "~a requires a value" name)))
-    (cond
-      ((null? args)
-       (unless video (die "missing VIDEO_FILE"))
-       (unless duration (die "missing --duration"))
-       (values video duration fade-audio fade-video fullscreen shutdown))
-      ((member (car args) '("-h" "--help"))
-       (usage-and-exit 0))
-      ((string=? (car args) "--duration")
-       (need-value! "--duration")
-       (loop (cddr args) video (parse-number-arg "--duration" (cadr args))
-             fade-audio fade-video fullscreen shutdown))
-      ((string=? (car args) "--fade-audio-at")
-       (need-value! "--fade-audio-at")
-       (loop (cddr args) video duration
-             (parse-number-arg "--fade-audio-at" (cadr args)) fade-video
-             fullscreen shutdown))
-      ((string=? (car args) "--fade-video-at")
-       (need-value! "--fade-video-at")
-       (loop (cddr args) video duration fade-audio
-             (parse-number-arg "--fade-video-at" (cadr args))
-             fullscreen shutdown))
-      ((string=? (car args) "--fullscreen")
-       (loop (cdr args) video duration fade-audio fade-video #t shutdown))
-      ((string=? (car args) "--shutdown")
-       (loop (cdr args) video duration fade-audio fade-video fullscreen #t))
-      ((and (positive? (string-length (car args))) (char=? (string-ref (car args) 0) #\-))
-       (die "unknown option ~a" (car args)))
-      (video (die "unexpected extra argument ~a" (car args)))
-      (else (loop (cdr args) (car args) duration fade-audio fade-video fullscreen shutdown)))))
+(define (parse-args argv)
+  (receive (options operands)
+      (args:parse argv option-spec #:unrecognized-proc unrecognized-option)
+    (let ((duration-str (opt-value 'duration options))
+          (fade-audio-str (opt-value 'fade-audio-at options))
+          (fade-video-str (opt-value 'fade-video-at options))
+          (fullscreen (and (assq 'fullscreen options) #t))
+          (shutdown (and (assq 'shutdown options) #t)))
+      (unless duration-str (die "missing --duration"))
+      (cond
+        ((null? operands) (die "missing VIDEO_FILE"))
+        ((pair? (cdr operands)) (die "unexpected extra argument ~a" (cadr operands)))
+        (else
+         (values (car operands)
+                 (parse-number-arg "--duration" duration-str)
+                 (and fade-audio-str (parse-number-arg "--fade-audio-at" fade-audio-str))
+                 (and fade-video-str (parse-number-arg "--fade-video-at" fade-video-str))
+                 fullscreen
+                 shutdown))))))
 
 (define (minutes->seconds m) (inexact->exact (round (* m 60))))
 

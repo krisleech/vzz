@@ -12,11 +12,21 @@ Use Chicken LISP as the language (https://www.call-cc.org/) targeting MacOs and 
 
 ## Build
 
-Requires [mpv](https://mpv.io) and the [CHICKEN Scheme](https://www.call-cc.org/) compiler (`csc`).
+Requires [mpv](https://mpv.io), CHICKEN Scheme 5 (`csc`), and the `args` egg.
+
+Homebrew only packages the latest CHICKEN (6.x), which has a much sparser
+egg index than 5.x -- notably missing the `args` egg this project uses for
+CLI parsing. To get CHICKEN 5.4.0 on macOS via Homebrew, install it from the
+last pre-6.0.0 formula revision:
 
 ```sh
-# macOS
-brew install mpv chicken
+brew install mpv
+brew tap-new local/chicken5 --no-git
+curl -fsSL "https://raw.githubusercontent.com/Homebrew/homebrew-core/81673db5db/Formula/c/chicken.rb" \
+  -o "$(brew --repository local/chicken5)/Formula/chicken.rb"
+brew install local/chicken5/chicken
+
+chicken-install args
 
 make
 ```
